@@ -111,7 +111,7 @@ async def upload_video(file: UploadFile = File(...)):
     angulo_promedio = int(sum(angulos) / len(angulos)) if angulos else 0
 
     # 🌐 URL pública (IMPORTANTE)
-    video_url = f"https://TU-APP.onrender.com/output/procesado_{file.filename}"
+    video_url = f"https://analizador-patinaje.onrender.com/output/procesado_{file.filename}"
 
     return {
         "mensaje": "Video analizado",
