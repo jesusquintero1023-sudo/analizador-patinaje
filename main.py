@@ -4,9 +4,7 @@ import shutil
 import os
 import cv2
 import numpy as np
-
-# 🔥 NUEVO IMPORT (CORREGIDO)
-from mediapipe.python.solutions import pose as mp_pose
+import mediapipe as mp
 
 app = FastAPI()
 
@@ -17,13 +15,14 @@ OUTPUT_FOLDER = "output"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# 📺 Permitir ver videos en la web
+# 📺 Servir videos procesados
 app.mount("/output", StaticFiles(directory=OUTPUT_FOLDER), name="output")
 
-# 🧠 Inicializar modelo
+# 🧠 MediaPipe (VERSIÓN ESTABLE)
+mp_pose = mp.solutions.pose
 pose = mp_pose.Pose()
 
-# 📐 FUNCIÓN PARA ÁNGULO
+# 📐 Función para calcular ángulo
 def calcular_angulo(a, b, c):
     a = np.array(a)
     b = np.array(b)
@@ -49,8 +48,9 @@ async def upload_video(file: UploadFile = File(...)):
     # 🎥 Leer video
     cap = cv2.VideoCapture(file_path)
 
-    # 📺 Crear video procesado
-    output_path = os.path.join(OUTPUT_FOLDER, f"procesado_{file.filename}")
+    output_path = os.path.join(
+        OUTPUT_FOLDER, f"procesado_{file.filename}"
+    )
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = None
@@ -73,7 +73,7 @@ async def upload_video(file: UploadFile = File(...)):
 
             landmarks = result.pose_landmarks.landmark
 
-            # 🔥 Coordenadas pierna derecha
+            # 🔥 Pierna derecha (cadera, rodilla, tobillo)
             hip = [landmarks[24].x, landmarks[24].y]
             knee = [landmarks[26].x, landmarks[26].y]
             ankle = [landmarks[28].x, landmarks[28].y]
@@ -81,15 +81,17 @@ async def upload_video(file: UploadFile = File(...)):
             angulo = calcular_angulo(hip, knee, ankle)
             angulos.append(angulo)
 
-            # 📐 Dibujar ángulo
-            cv2.putText(frame,
-                        f'Rodilla: {angulo}',
-                        (50, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        1,
-                        (0, 255, 0),
-                        2,
-                        cv2.LINE_AA)
+            # 📐 Mostrar ángulo
+            cv2.putText(
+                frame,
+                f'Rodilla: {angulo}',
+                (50, 50),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 0),
+                2,
+                cv2.LINE_AA
+            )
 
             # 🎯 Dibujar puntos
             for lm in landmarks:
@@ -107,11 +109,13 @@ async def upload_video(file: UploadFile = File(...)):
     if out:
         out.release()
 
-    # 📊 Promedio
+    # 📊 Promedio del ángulo
     angulo_promedio = int(sum(angulos) / len(angulos)) if angulos else 0
 
-    # 🌐 URL pública (IMPORTANTE)
-    video_url = f"https://analizador-patinaje.onrender.com/output/procesado_{file.filename}"
+    # 🌐 URL (CAMBIA POR TU LINK REAL)
+    BASE_URL = "https://analizador-patinaje.onrender.com"  # 👈 CAMBIA ESTO
+
+    video_url = f"{BASE_URL}/output/procesado_{file.filename}"
 
     return {
         "mensaje": "Video analizado",
