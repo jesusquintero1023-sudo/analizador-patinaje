@@ -3,7 +3,10 @@ from fastapi.staticfiles import StaticFiles
 import shutil
 import os
 import cv2
-import mediapipe as mp
+import numpy as np
+
+# 🔥 NUEVO IMPORT (CORREGIDO)
+from mediapipe.python.solutions import pose as mp_pose
 
 app = FastAPI()
 
@@ -14,44 +17,53 @@ OUTPUT_FOLDER = "output"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# 📡 Servir archivos (para que Flutter pueda verlos)
+# 📺 Permitir ver videos en la web
 app.mount("/output", StaticFiles(directory=OUTPUT_FOLDER), name="output")
 
-# 🧠 MediaPipe
-mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
+# 🧠 Inicializar modelo
 pose = mp_pose.Pose()
+
+# 📐 FUNCIÓN PARA ÁNGULO
+def calcular_angulo(a, b, c):
+    a = np.array(a)
+    b = np.array(b)
+    c = np.array(c)
+
+    ba = a - b
+    bc = c - b
+
+    cos_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
+    angle = np.degrees(np.arccos(cos_angle))
+
+    return int(angle)
+
 
 @app.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
+    # 📥 Guardar video
+    file_path = os.path.join(UPLOAD_FOLDER, file.filename)
 
-    # 📁 Guardar video original
-    input_path = os.path.join(UPLOAD_FOLDER, file.filename)
-
-    with open(input_path, "wb") as buffer:
+    with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # 🎥 Abrir video
-    cap = cv2.VideoCapture(input_path)
+    # 🎥 Leer video
+    cap = cv2.VideoCapture(file_path)
 
-    # 📊 Contador
-    frames_analizados = 0
-
-    # 🎬 Configuración video salida
+    # 📺 Crear video procesado
     output_path = os.path.join(OUTPUT_FOLDER, f"procesado_{file.filename}")
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    out = None
 
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    frames_analizados = 0
+    angulos = []
 
-    # 🔥 PROCESAR VIDEO
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
+
+        h, w, _ = frame.shape
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = pose.process(rgb)
@@ -59,24 +71,51 @@ async def upload_video(file: UploadFile = File(...)):
         if result.pose_landmarks:
             frames_analizados += 1
 
-            # 🎯 Dibujar puntos en el frame
-            mp_drawing.draw_landmarks(
-                frame,
-                result.pose_landmarks,
-                mp_pose.POSE_CONNECTIONS
-            )
+            landmarks = result.pose_landmarks.landmark
 
-        # 💾 Guardar frame procesado
+            # 🔥 Coordenadas pierna derecha
+            hip = [landmarks[24].x, landmarks[24].y]
+            knee = [landmarks[26].x, landmarks[26].y]
+            ankle = [landmarks[28].x, landmarks[28].y]
+
+            angulo = calcular_angulo(hip, knee, ankle)
+            angulos.append(angulo)
+
+            # 📐 Dibujar ángulo
+            cv2.putText(frame,
+                        f'Rodilla: {angulo}',
+                        (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        1,
+                        (0, 255, 0),
+                        2,
+                        cv2.LINE_AA)
+
+            # 🎯 Dibujar puntos
+            for lm in landmarks:
+                x = int(lm.x * w)
+                y = int(lm.y * h)
+                cv2.circle(frame, (x, y), 5, (0, 0, 255), -1)
+
+        # 📹 Inicializar writer
+        if out is None:
+            out = cv2.VideoWriter(output_path, fourcc, 20.0, (w, h))
+
         out.write(frame)
 
     cap.release()
-    out.release()
+    if out:
+        out.release()
 
-    # 🌐 URL del video para Flutter
+    # 📊 Promedio
+    angulo_promedio = int(sum(angulos) / len(angulos)) if angulos else 0
+
+    # 🌐 URL pública (IMPORTANTE)
     video_url = f"https://TU-APP.onrender.com/output/procesado_{file.filename}"
 
     return {
         "mensaje": "Video analizado",
         "frames_con_postura": frames_analizados,
+        "angulo_rodilla": angulo_promedio,
         "video_url": video_url
     }
