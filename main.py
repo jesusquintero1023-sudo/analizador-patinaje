@@ -20,7 +20,7 @@ app.mount("/output", StaticFiles(directory=OUTPUT_FOLDER), name="output")
 
 # 🧠 MediaPipe (VERSIÓN ESTABLE)
 mp_pose = mp.solutions.pose
-pose = mp_pose.Pose()
+pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5)
 
 # 📐 Función para calcular ángulo
 def calcular_angulo(a, b, c):
