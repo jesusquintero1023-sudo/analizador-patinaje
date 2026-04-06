@@ -19,7 +19,10 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 app.mount("/output", StaticFiles(directory=OUTPUT_FOLDER), name="output")
 
 # 🧠 MediaPipe (VERSIÓN ESTABLE)
-mp_pose = mp.solutions.pose
+from mediapipe.python.solutions import pose as mp_pose
+mp_drawing = mp.solutions.drawing_utils
+
+# Y cuando inicialices el objeto:
 pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5)
 
 # 📐 Función para calcular ángulo
