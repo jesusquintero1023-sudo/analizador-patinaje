@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 import shutil
 import os
 import cv2
@@ -8,30 +9,28 @@ import mediapipe as mp
 
 app = FastAPI()
 
-# 📁 Carpetas
+# 📁 Carpetas de almacenamiento
 UPLOAD_FOLDER = "videos"
 OUTPUT_FOLDER = "output"
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# 📺 Servir videos procesados
+# 📺 Servir videos procesados para que se puedan ver en el navegador
 app.mount("/output", StaticFiles(directory=OUTPUT_FOLDER), name="output")
 
-# 🧠 MediaPipe (VERSIÓN ESTABLE)
-# Configuración estándar de MediaPipe
+# 🧠 Configuración estable de MediaPipe para Python 3.11
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 
-# Inicializar el modelo
 pose = mp_pose.Pose(
-    static_image_mode=False, 
-    model_complexity=1, # Añade esto para que sea más ligero en Render
+    static_image_mode=False,
+    model_complexity=1,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
 
-# 📐 Función para calcular ángulo
+# 📐 Función matemática para calcular el ángulo de la rodilla
 def calcular_angulo(a, b, c):
     a = np.array(a)
     b = np.array(b)
@@ -41,26 +40,61 @@ def calcular_angulo(a, b, c):
     bc = c - b
 
     cos_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc))
-    angle = np.degrees(np.arccos(cos_angle))
+    angle = np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0)))
 
     return int(angle)
 
+# --- 🎨 INTERFAZ WEB PROFESIONAL ---
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return """
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Analizador de Patinaje</title>
+        <style>
+            body { font-family: 'Segoe UI', sans-serif; background-color: #f0f2f5; margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+            .card { background: white; padding: 2.5rem; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); text-align: center; width: 90%; max-width: 450px; }
+            .icon { font-size: 4rem; margin-bottom: 10px; }
+            h1 { color: #1a2a6c; margin-bottom: 10px; font-size: 1.8rem; }
+            p { color: #555; line-height: 1.6; margin-bottom: 25px; }
+            .file-input { margin-bottom: 25px; }
+            .btn { background: linear-gradient(135deg, #1a2a6c, #b21f1f, #fdbb2d); color: white; border: none; padding: 15px 30px; border-radius: 30px; cursor: pointer; font-size: 1.1rem; font-weight: bold; width: 100%; transition: transform 0.2s; }
+            .btn:hover { transform: scale(1.02); }
+            .footer { margin-top: 30px; font-size: 0.8rem; color: #888; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="icon">🛼</div>
+            <h1>Analizador Pro</h1>
+            <p>Sube el video de entrenamiento para obtener el análisis biomecánico de la rodilla.</p>
+            <form action="/upload" enctype="multipart/form-data" method="post">
+                <div class="file-input">
+                    <input name="file" type="file" accept="video/*" required>
+                </div>
+                <button type="submit" class="btn">INICIAR ANÁLISIS</button>
+            </form>
+            <div class="footer">Sistema Optimizado para Clubes de Patinaje</div>
+        </div>
+    </body>
+    </html>
+    """
 
 @app.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
-    # 📥 Guardar video
+    # 📥 Guardar el video original
     file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # 🎥 Leer video
+    # 🎥 Procesamiento del video con OpenCV
     cap = cv2.VideoCapture(file_path)
-
-    output_path = os.path.join(
-        OUTPUT_FOLDER, f"procesado_{file.filename}"
-    )
-
+    output_path = os.path.join(OUTPUT_FOLDER, f"procesado_{file.filename}")
+    
+    # Configurar el formato de salida
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = None
 
@@ -73,16 +107,14 @@ async def upload_video(file: UploadFile = File(...)):
             break
 
         h, w, _ = frame.shape
-
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = pose.process(rgb)
 
         if result.pose_landmarks:
             frames_analizados += 1
-
             landmarks = result.pose_landmarks.landmark
 
-            # 🔥 Pierna derecha (cadera, rodilla, tobillo)
+            # 🔥 Puntos clave: Cadera (24), Rodilla (26), Tobillo (28)
             hip = [landmarks[24].x, landmarks[24].y]
             knee = [landmarks[26].x, landmarks[26].y]
             ankle = [landmarks[28].x, landmarks[28].y]
@@ -90,45 +122,30 @@ async def upload_video(file: UploadFile = File(...)):
             angulo = calcular_angulo(hip, knee, ankle)
             angulos.append(angulo)
 
-            # 📐 Mostrar ángulo
-            cv2.putText(
-                frame,
-                f'Rodilla: {angulo}',
-                (50, 50),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 255, 0),
-                2,
-                cv2.LINE_AA
-            )
+            # Dibujar esqueleto y ángulo en el video
+            mp_drawing.draw_landmarks(frame, result.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+            cv2.putText(frame, f'Angulo: {angulo} deg', (50, 50), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-            # 🎯 Dibujar puntos
-            for lm in landmarks:
-                x = int(lm.x * w)
-                y = int(lm.y * h)
-                cv2.circle(frame, (x, y), 5, (0, 0, 255), -1)
-
-        # 📹 Inicializar writer
         if out is None:
             out = cv2.VideoWriter(output_path, fourcc, 20.0, (w, h))
-
+        
         out.write(frame)
 
     cap.release()
     if out:
         out.release()
 
-    # 📊 Promedio del ángulo
-    angulo_promedio = int(sum(angulos) / len(angulos)) if angulos else 0
-
-    # 🌐 URL (CAMBIA POR TU LINK REAL)
-    BASE_URL = "https://analizador-patinaje.onrender.com"  # 👈 CAMBIA ESTO
-
+    # 📊 Resultados finales
+    promedio = int(sum(angulos) / len(angulos)) if angulos else 0
+    
+    # URL para ver el video (Render usa HTTPS)
+    BASE_URL = "https://analizador-patinaje.onrender.com"
     video_url = f"{BASE_URL}/output/procesado_{file.filename}"
 
     return {
-        "mensaje": "Video analizado",
-        "frames_con_postura": frames_analizados,
-        "angulo_rodilla": angulo_promedio,
-        "video_url": video_url
+        "estado": "Éxito",
+        "deportista": file.filename,
+        "angulo_promedio_rodilla": promedio,
+        "video_analizado": video_url
     }
