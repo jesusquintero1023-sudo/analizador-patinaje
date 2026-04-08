@@ -10,7 +10,6 @@ import uuid
 
 app = FastAPI()
 
-# 1. PERMITIR CONEXIONES (Importante para Flutter)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,12 +17,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. CONFIGURACIÓN DE MEDIAPIPE
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5)
 mp_drawing = mp.solutions.drawing_utils
 
-# 3. CARPETAS DE SALIDA
 OUTPUT_DIR = "static/videos"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -34,89 +31,41 @@ def calculate_angle(a, b, c):
     angle = np.abs(radians * 180.0 / np.pi)
     return 360 - angle if angle > 180.0 else angle
 
-# --- INTERFAZ WEB CON EL DISEÑO LILA DE FLUTTER ---
+# --- PÁGINA DE INICIO (ESTILO APP) ---
 @app.get("/", response_class=HTMLResponse)
 async def home():
     return """
     <html>
         <head>
-            <title>Club Skate Wheels - Web</title>
+            <title>Club Skate Wheels</title>
             <meta name="viewport" content="width=device-width, initial-scale=1">
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
             <style>
-                body { 
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-                    background-color: #FCFAFF; 
-                    margin: 0; 
-                    display: flex; 
-                    justify-content: center; 
-                    align-items: center; 
-                    min-height: 100vh; 
-                }
-                .container { 
-                    background: white; 
-                    padding: 40px; 
-                    border-radius: 30px; 
-                    box-shadow: 0 10px 30px rgba(0,0,0,0.05); 
-                    text-align: center; 
-                    width: 90%; 
-                    max-width: 400px;
-                    border: 1px solid #E0DAEB;
-                }
-                .logo-container {
-                    background: white;
-                    padding: 10px;
-                    border-radius: 20px;
-                    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
-                    display: inline-block;
-                    margin-bottom: 20px;
-                }
-                h1 { color: #1A1A1A; font-size: 24px; margin-bottom: 30px; }
-                .btn { 
-                    background: #F3F0F7; 
-                    color: #5D4D8A; 
-                    border: 1px solid #E0DAEB; 
-                    padding: 15px 30px; 
-                    border-radius: 30px; 
-                    cursor: pointer; 
-                    font-weight: bold; 
-                    width: 100%;
-                    font-size: 16px;
-                    transition: 0.3s;
-                    text-decoration: none;
-                    display: inline-block;
-                }
-                .btn:hover { background: #EBE4FF; }
-                .btn-primary {
-                    background: #5D4D8A;
-                    color: white;
-                    margin-top: 15px;
-                }
-                input[type="file"] { margin: 20px 0; font-size: 14px; color: #5D4D8A; }
-                p { color: #666; font-size: 14px; }
+                body { font-family: 'Segoe UI', sans-serif; background-color: #FCFAFF; margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+                .card { background: white; padding: 40px; border-radius: 35px; box-shadow: 0 15px 35px rgba(0,0,0,0.05); text-align: center; width: 90%; max-width: 400px; }
+                .btn { background: #F3F0F7; color: #5D4D8A; border: none; padding: 15px; border-radius: 30px; cursor: pointer; font-weight: bold; width: 100%; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 10px; text-decoration: none; }
+                .btn-primary { background: #5D4D8A; color: white; margin-top: 15px; }
+                input[type="file"] { display: none; }
+                h1 { font-size: 24px; margin: 15px 0; color: #1A1A1A; }
             </style>
         </head>
         <body>
-            <div class="container">
-                <div class="logo-container">
-                    <img src="/static/logo.jpeg" height="120" alt="Logo">
-                </div>
+            <div class="card">
+                <img src="/static/logo.jpeg" height="100" style="border-radius: 20px;">
                 <h1>Club Skate Wheels</h1>
-                <p>Analizador Biomecánico de Patinaje</p>
-                
+                <p style="color: #888; font-size: 14px;">Analizador Biomecánico</p>
                 <form action="/analyze" enctype="multipart/form-data" method="post">
-                    <input name="file" type="file" accept="video/*" required>
-                    <button type="submit" class="btn btn-primary">INICIAR ANÁLISIS EN PC</button>
+                    <label class="btn" for="u"><i class="fas fa-file-video"></i> Seleccionar Video</label>
+                    <input id="u" name="file" type="file" accept="video/*" required>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-play"></i> INICIAR ANÁLISIS</button>
                 </form>
-                
-                <div style="margin-top: 30px;">
-                    <p style="font-size: 10px; color: #BBB;">Sistema de Análisis v1.5 - UTS 2026</p>
-                </div>
             </div>
         </body>
     </html>
     """
 
-@app.post("/analyze")
+# --- PROCESAMIENTO Y RESPUESTA VISUAL ---
+@app.post("/analyze", response_class=HTMLResponse)
 async def analyze_video(file: UploadFile = File(...)):
     file_extension = file.filename.split(".")[-1]
     input_path = f"temp_{uuid.uuid4()}.{file_extension}"
@@ -127,61 +76,62 @@ async def analyze_video(file: UploadFile = File(...)):
         buffer.write(await file.read())
 
     cap = cv2.VideoCapture(input_path)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (height, width)) 
 
-    # AJUSTE PARA VIDEO VERTICAL (Rotación y dimensiones)
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (height, width)) 
-
-    angles_rodilla = []
-    angles_sentadilla = []
-    frames_count = 0
-    
+    angles_r, angles_s = [], []
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
-        frames_count += 1
-        
-        # CORRECCIÓN DE ROTACIÓN PARA CELULARES
         frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose.process(image)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-
+        results = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         if results.pose_landmarks:
-            mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
             lm = results.pose_landmarks.landmark
-            
-            # Puntos: Hombro(12), Cadera(24), Rodilla(26), Tobillo(28)
-            shoulder = [lm[12].x, lm[12].y]
-            hip = [lm[24].x, lm[24].y]
-            knee = [lm[26].x, lm[26].y]
-            ankle = [lm[28].x, lm[28].y]
+            p = [[lm[i].x, lm[i].y] for i in [12, 24, 26, 28]] # Hombro, Cadera, Rodilla, Tobillo
+            ar, asat = calculate_angle(p[1], p[2], p[3]), calculate_angle(p[0], p[1], p[2])
+            angles_r.append(ar); angles_s.append(asat)
+            cv2.putText(frame, f"Rodilla: {int(ar)} deg", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        out.write(frame)
+    cap.release(); out.release()
 
-            ang_r = calculate_angle(hip, knee, ankle)
-            ang_s = calculate_angle(shoulder, hip, knee)
-            
-            angles_rodilla.append(ang_r)
-            angles_sentadilla.append(ang_s)
-
-            # Dibujado de grados en el video procesado
-            cv2.putText(image, f"Rodilla: {int(ang_r)} deg", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(image, f"Postura: {int(ang_s)} deg", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-
-        out.write(image)
-
-    cap.release()
-    out.release()
-    if os.path.exists(input_path): os.remove(input_path)
-
-    return {
-        "average_angle": round(np.mean(angles_rodilla), 1) if angles_rodilla else 0,
-        "squat_angle": round(np.mean(angles_sentadilla), 1) if angles_sentadilla else 0,
-        "max_angle": round(np.max(angles_rodilla), 1) if angles_rodilla else 0,
-        "min_angle": round(np.min(angles_rodilla), 1) if angles_rodilla else 0,
-        "duration": round(frames_count / fps, 2),
-        "video_url": f"/static/videos/{output_filename}"
+    res = {
+        "avg_r": round(np.mean(angles_r), 1) if angles_r else 0,
+        "avg_s": round(np.mean(angles_s), 1) if angles_s else 0,
+        "dur": round(len(angles_r)/fps, 2) if angles_r else 0,
+        "url": f"/static/videos/{output_filename}"
     }
+
+    return f"""
+    <html>
+        <head>
+            <title>Resultados</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+            <style>
+                body {{ font-family: 'Segoe UI', sans-serif; background: #FCFAFF; display: flex; justify-content: center; padding: 20px; }}
+                .res-card {{ background: white; padding: 30px; border-radius: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); max-width: 450px; text-align: center; }}
+                .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0; }}
+                .item {{ background: #F3F0F7; padding: 15px; border-radius: 20px; }}
+                .item i {{ color: #5D4D8A; font-size: 20px; }}
+                .val {{ font-size: 20px; font-weight: bold; color: #5D4D8A; display: block; }}
+                .lbl {{ font-size: 10px; color: #888; font-weight: bold; }}
+                video {{ width: 100%; border-radius: 20px; margin-top: 20px; }}
+                .back {{ color: #5D4D8A; text-decoration: none; font-weight: bold; display: block; margin-top: 20px; }}
+            </style>
+        </head>
+        <body>
+            <div class="res-card">
+                <h2 style="color: #5D4D8A;">INFORME TÉCNICO</h2>
+                <div class="grid">
+                    <div class="item"><i class="fas fa-chart-line"></i><span class="lbl">RODILLA</span><span class="val">{res['avg_r']}°</span></div>
+                    <div class="item"><i class="fas fa-user-check"></i><span class="lbl">SENTADILLA</span><span class="val">{res['avg_s']}°</span></div>
+                    <div class="item"><i class="fas fa-clock"></i><span class="lbl">DURACIÓN</span><span class="val">{res['dur']}s</span></div>
+                    <div class="item"><i class="fas fa-check-circle"></i><span class="lbl">ESTADO</span><span class="val">OK</span></div>
+                </div>
+                <video controls autoplay loop><source src="{res['url']}" type="video/mp4"></video>
+                <a href="/" class="back">← Volver a analizar</a>
+            </div>
+        </body>
+    </html>
+    """
