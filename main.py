@@ -10,7 +10,6 @@ import uuid
 
 app = FastAPI()
 
-# 1. PERMITIR CONEXIONES (Para que el celular no falle)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,12 +17,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. CONFIGURACIÓN DE MEDIAPIPE
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5)
 mp_drawing = mp.solutions.drawing_utils
 
-# 3. CARPETAS DE SALIDA
 OUTPUT_DIR = "static/videos"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -34,29 +31,17 @@ def calculate_angle(a, b, c):
     angle = np.abs(radians * 180.0 / np.pi)
     return 360 - angle if angle > 180.0 else angle
 
-# --- INTERFAZ HTML PARA EL PC (LO QUE HABÍAMOS QUITADO) ---
 @app.get("/", response_class=HTMLResponse)
 async def home():
     return """
     <html>
-        <head>
-            <title>Club Skate Wheels - Analizador</title>
-            <style>
-                body { font-family: 'Arial', sans-serif; text-align: center; padding: 40px; background-color: #F8F7FF; }
-                .card { background: white; padding: 30px; border-radius: 25px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); display: inline-block; max-width: 500px; }
-                h2 { color: #5D4D8A; }
-                .upload-btn { background: #5D4D8A; color: white; border: none; padding: 12px 25px; border-radius: 30px; cursor: pointer; font-weight: bold; }
-                input[type="file"] { margin: 20px 0; }
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <img src="/static/logo.jpeg" style="height: 100px; margin-bottom: 20px;" onerror="this.style.display='none'">
-                <h2>🏁 Analizador Biomecánico</h2>
-                <p>Club Skate Wheels - Proyecto de Grado</p>
+        <head><title>Club Skate Wheels</title></head>
+        <body style="font-family:sans-serif; text-align:center; padding:50px; background:#F8F7FF;">
+            <div style="background:white; padding:30px; border-radius:20px; display:inline-block; box-shadow:0 10px 20px rgba(0,0,0,0.1);">
+                <h2>🏁 Analizador Biomecánico - PC</h2>
                 <form action="/analyze" enctype="multipart/form-data" method="post">
-                    <input name="file" type="file" accept="video/*"><br>
-                    <button type="submit" class="upload-btn">ANALIZAR VIDEO EN PC</button>
+                    <input name="file" type="file" accept="video/*"><br><br>
+                    <button type="submit" style="background:#5D4D8A; color:white; border:none; padding:10px 20px; border-radius:10px;">Analizar Video</button>
                 </form>
             </div>
         </body>
@@ -74,14 +59,17 @@ async def analyze_video(file: UploadFile = File(...)):
         buffer.write(await file.read())
 
     cap = cv2.VideoCapture(input_path)
+    # Detectar si el video es vertical u horizontal para la salida
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
 
+    # Ajustamos dimensiones si vamos a rotar (Vertical)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    out = cv2.VideoWriter(output_path, fourcc, fps, (height, width)) 
 
-    angles = []
+    angles_rodilla = []
+    angles_sentadilla = []
     frames_count = 0
     
     while cap.isOpened():
@@ -89,25 +77,32 @@ async def analyze_video(file: UploadFile = File(...)):
         if not ret: break
         frames_count += 1
         
+        # --- CORRECCIÓN DE ROTACIÓN ---
+        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = pose.process(image)
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
         if results.pose_landmarks:
             mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-            landmarks = results.pose_landmarks.landmark
+            lm = results.pose_landmarks.landmark
             
-            # Puntos clave: Cadera(24), Rodilla(26), Tobillo(28)
-            h = [landmarks[24].x, landmarks[24].y]
-            k = [landmarks[26].x, landmarks[26].y]
-            a = [landmarks[28].x, landmarks[28].y]
+            # Puntos: Hombro(12), Cadera(24), Rodilla(26), Tobillo(28)
+            shoulder = [lm[12].x, lm[12].y]
+            hip = [lm[24].x, lm[24].y]
+            knee = [lm[26].x, lm[26].y]
+            ankle = [lm[28].x, lm[28].y]
 
-            ang = calculate_angle(h, k, a)
-            angles.append(ang)
+            ang_r = calculate_angle(hip, knee, ankle)
+            ang_s = calculate_angle(shoulder, hip, knee)
+            
+            angles_rodilla.append(ang_r)
+            angles_sentadilla.append(ang_s)
 
-            cv2.putText(image, f"{int(ang)} deg", 
-                        tuple(np.multiply(k, [width, height]).astype(int)), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            # Dibujar info en video
+            cv2.putText(image, f"R: {int(ang_r)} deg", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(image, f"S: {int(ang_s)} deg", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
 
         out.write(image)
 
@@ -115,11 +110,11 @@ async def analyze_video(file: UploadFile = File(...)):
     out.release()
     if os.path.exists(input_path): os.remove(input_path)
 
-    # DATOS PARA FLUTTER Y PC
     return {
-        "average_angle": round(np.mean(angles), 1) if angles else 0,
-        "max_angle": round(np.max(angles), 1) if angles else 0,
-        "min_angle": round(np.min(angles), 1) if angles else 0,
+        "average_angle": round(np.mean(angles_rodilla), 1) if angles_rodilla else 0,
+        "squat_angle": round(np.mean(angles_sentadilla), 1) if angles_sentadilla else 0,
+        "max_angle": round(np.max(angles_rodilla), 1) if angles_rodilla else 0,
+        "min_angle": round(np.min(angles_rodilla), 1) if angles_rodilla else 0,
         "duration": round(frames_count / fps, 2),
         "video_url": f"/static/videos/{output_filename}"
     }
