@@ -10,6 +10,7 @@ import uuid
 
 app = FastAPI()
 
+# 1. PERMITIR CONEXIONES (Importante para Flutter)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,10 +18,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 2. CONFIGURACIÓN DE MEDIAPIPE
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5)
 mp_drawing = mp.solutions.drawing_utils
 
+# 3. CARPETAS DE SALIDA
 OUTPUT_DIR = "static/videos"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -31,18 +34,83 @@ def calculate_angle(a, b, c):
     angle = np.abs(radians * 180.0 / np.pi)
     return 360 - angle if angle > 180.0 else angle
 
+# --- INTERFAZ WEB CON EL DISEÑO LILA DE FLUTTER ---
 @app.get("/", response_class=HTMLResponse)
 async def home():
     return """
     <html>
-        <head><title>Club Skate Wheels</title></head>
-        <body style="font-family:sans-serif; text-align:center; padding:50px; background:#F8F7FF;">
-            <div style="background:white; padding:30px; border-radius:20px; display:inline-block; box-shadow:0 10px 20px rgba(0,0,0,0.1);">
-                <h2>🏁 Analizador Biomecánico - PC</h2>
+        <head>
+            <title>Club Skate Wheels - Web</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body { 
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                    background-color: #FCFAFF; 
+                    margin: 0; 
+                    display: flex; 
+                    justify-content: center; 
+                    align-items: center; 
+                    min-height: 100vh; 
+                }
+                .container { 
+                    background: white; 
+                    padding: 40px; 
+                    border-radius: 30px; 
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.05); 
+                    text-align: center; 
+                    width: 90%; 
+                    max-width: 400px;
+                    border: 1px solid #E0DAEB;
+                }
+                .logo-container {
+                    background: white;
+                    padding: 10px;
+                    border-radius: 20px;
+                    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+                    display: inline-block;
+                    margin-bottom: 20px;
+                }
+                h1 { color: #1A1A1A; font-size: 24px; margin-bottom: 30px; }
+                .btn { 
+                    background: #F3F0F7; 
+                    color: #5D4D8A; 
+                    border: 1px solid #E0DAEB; 
+                    padding: 15px 30px; 
+                    border-radius: 30px; 
+                    cursor: pointer; 
+                    font-weight: bold; 
+                    width: 100%;
+                    font-size: 16px;
+                    transition: 0.3s;
+                    text-decoration: none;
+                    display: inline-block;
+                }
+                .btn:hover { background: #EBE4FF; }
+                .btn-primary {
+                    background: #5D4D8A;
+                    color: white;
+                    margin-top: 15px;
+                }
+                input[type="file"] { margin: 20px 0; font-size: 14px; color: #5D4D8A; }
+                p { color: #666; font-size: 14px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="logo-container">
+                    <img src="/static/logo.jpeg" height="120" alt="Logo">
+                </div>
+                <h1>Club Skate Wheels</h1>
+                <p>Analizador Biomecánico de Patinaje</p>
+                
                 <form action="/analyze" enctype="multipart/form-data" method="post">
-                    <input name="file" type="file" accept="video/*"><br><br>
-                    <button type="submit" style="background:#5D4D8A; color:white; border:none; padding:10px 20px; border-radius:10px;">Analizar Video</button>
+                    <input name="file" type="file" accept="video/*" required>
+                    <button type="submit" class="btn btn-primary">INICIAR ANÁLISIS EN PC</button>
                 </form>
+                
+                <div style="margin-top: 30px;">
+                    <p style="font-size: 10px; color: #BBB;">Sistema de Análisis v1.5 - UTS 2026</p>
+                </div>
             </div>
         </body>
     </html>
@@ -59,12 +127,11 @@ async def analyze_video(file: UploadFile = File(...)):
         buffer.write(await file.read())
 
     cap = cv2.VideoCapture(input_path)
-    # Detectar si el video es vertical u horizontal para la salida
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
 
-    # Ajustamos dimensiones si vamos a rotar (Vertical)
+    # AJUSTE PARA VIDEO VERTICAL (Rotación y dimensiones)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (height, width)) 
 
@@ -77,7 +144,7 @@ async def analyze_video(file: UploadFile = File(...)):
         if not ret: break
         frames_count += 1
         
-        # --- CORRECCIÓN DE ROTACIÓN ---
+        # CORRECCIÓN DE ROTACIÓN PARA CELULARES
         frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
         
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -100,9 +167,9 @@ async def analyze_video(file: UploadFile = File(...)):
             angles_rodilla.append(ang_r)
             angles_sentadilla.append(ang_s)
 
-            # Dibujar info en video
-            cv2.putText(image, f"R: {int(ang_r)} deg", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(image, f"S: {int(ang_s)} deg", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+            # Dibujado de grados en el video procesado
+            cv2.putText(image, f"Rodilla: {int(ang_r)} deg", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(image, f"Postura: {int(ang_s)} deg", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
 
         out.write(image)
 
