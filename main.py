@@ -17,9 +17,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inicialización ligera de MediaPipe
+# Inicialización optimizada
 mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5)
+pose = mp_pose.Pose(
+    static_image_mode=False, 
+    model_complexity=0, # 0 es el más rápido y ligero para evitar que Render se cuelgue
+    min_detection_confidence=0.5
+)
 
 OUTPUT_DIR = "static/videos"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -54,13 +58,12 @@ async def home():
             <div id="overlay"><div class="spinner"></div><p style="color:#5D4D8A; font-weight:bold; margin-top:15px;">Analizando técnica...</p></div>
             <div class="card">
                 <img src="/static/logo.jpeg" height="100" style="border-radius: 20px;">
-                <h1 style="font-size: 22px;">Club Skate Wheels</h1>
+                <h1>Club Skate Wheels</h1>
                 <form action="/analyze" enctype="multipart/form-data" method="post" onsubmit="document.getElementById('overlay').style.display='flex'">
-                    <label class="btn" for="u"><i class="fas fa-video"></i> Elegir Video</label>
+                    <label class="btn" for="u"><i class="fas fa-video"></i> Seleccionar Video</label>
                     <input id="u" name="file" type="file" accept="video/*" required>
-                    <button type="submit" class="btn btn-primary">INICIAR ANÁLISIS EN PC</button>
+                    <button type="submit" class="btn btn-primary">INICIAR ANÁLISIS</button>
                 </form>
-                <p style="font-size: 10px; color: #BBB; margin-top: 20px;">Sistema v1.5 - UTS 2026</p>
             </div>
         </body>
     </html>
@@ -76,31 +79,42 @@ async def analyze_video(file: UploadFile = File(...)):
     with open(in_p, "wb") as b: b.write(await file.read())
 
     cap = cv2.VideoCapture(in_p)
-    f_w, f_h = int(cap.get(3)), int(cap.get(4))
-    fps = cap.get(5) or 30
-    out = cv2.VideoWriter(out_p, cv2.VideoWriter_fourcc(*'mp4v'), fps, (f_h, f_w))
+    # Obtenemos dimensiones originales
+    orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    
+    # Al rotar 90 grados, el ancho se vuelve el alto y viceversa
+    out = cv2.VideoWriter(out_p, cv2.VideoWriter_fourcc(*'mp4v'), fps, (orig_h, orig_w))
 
     angles_r, angles_s = [], []
+    
+    # Procesamos solo 1 de cada 2 frames para que Render no se muera (más rápido)
+    count = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
+        
         frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        res = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        if res.pose_landmarks:
-            lm = res.pose_landmarks.landmark
-            p = [[lm[i].x, lm[i].y] for i in [12, 24, 26, 28]]
-            ar, asat = calculate_angle(p[1], p[2], p[3]), calculate_angle(p[0], p[1], p[2])
-            angles_r.append(ar); angles_s.append(asat)
-            cv2.putText(frame, f"R: {int(ar)}", (40, 60), 1, 2, (0, 255, 0), 2)
+        
+        if count % 2 == 0:
+            res = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if res.pose_landmarks:
+                lm = res.pose_landmarks.landmark
+                p = [[lm[i].x, lm[i].y] for i in [12, 24, 26, 28]]
+                ar, asat = calculate_angle(p[1], p[2], p[3]), calculate_angle(p[0], p[1], p[2])
+                angles_r.append(ar); angles_s.append(asat)
+                cv2.putText(frame, f"R: {int(ar)} deg", (40, 60), 1, 2, (0, 255, 0), 2)
+        
         out.write(frame)
+        count += 1
+        
     cap.release(); out.release()
     if os.path.exists(in_p): os.remove(in_p)
 
-    # Variables para el informe
     avg_r = round(np.mean(angles_r), 1) if angles_r else 0
     avg_s = round(np.mean(angles_s), 1) if angles_s else 0
-    dur = round(len(angles_r)/fps, 2)
-    v_url = f"/static/videos/{out_f}"
+    dur = round(count / fps, 2)
 
     return f"""
     <html>
@@ -119,15 +133,15 @@ async def analyze_video(file: UploadFile = File(...)):
         </head>
         <body>
             <div class="res-card">
-                <h2 style="color:#5D4D8A; margin-top:0;">INFORME TÉCNICO</h2>
+                <h2 style="color:#5D4D8A;">INFORME FINAL</h2>
                 <div class="grid">
                     <div class="item"><span class="lbl">RODILLA</span><span class="val">{avg_r}°</span></div>
                     <div class="item"><span class="lbl">SENTADILLA</span><span class="val">{avg_s}°</span></div>
                     <div class="item"><span class="lbl">DURACIÓN</span><span class="val">{dur}s</span></div>
-                    <div class="item"><span class="lbl">ESTADO</span><span class="val">OK</span></div>
+                    <div class="item"><span class="lbl">ESTADO</span><span class="val">EXITOSO</span></div>
                 </div>
-                <video controls autoplay loop><source src="{v_url}" type="video/mp4"></video>
-                <a href="/" style="display:block; margin-top:20px; color:#5D4D8A; text-decoration:none; font-weight:bold;">← Volver</a>
+                <video controls autoplay loop><source src="/static/videos/{out_f}" type="video/mp4"></video>
+                <a href="/" style="display:block; margin-top:20px; color:#5D4D8A; text-decoration:none; font-weight:bold;">← Volver a intentar</a>
             </div>
         </body>
     </html>
