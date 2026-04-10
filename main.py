@@ -9,9 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import uuid
 
 app = FastAPI()
-
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# Configuración de carpetas
 STATIC_DIR = "static"
 VIDEOS_DIR = os.path.join(STATIC_DIR, "videos")
 os.makedirs(VIDEOS_DIR, exist_ok=True)
@@ -38,14 +38,26 @@ async def home():
         <title>Club Skate Wheels</title>
         <style>
             :root { --primary: #5D4D8A; --bg: #FCFAFF; }
-            body { font-family: 'Segoe UI', sans-serif; background: var(--bg); display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+            body { font-family: 'Segoe UI', sans-serif; background: var(--bg); display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }
             .card { background: white; padding: 40px; border-radius: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); text-align: center; width: 100%; max-width: 400px; }
             .logo-img { width: 180px; margin-bottom: 20px; }
-            h1 { font-size: 26px; margin: 0; color: #111; font-weight: bold; }
+            h1 { font-size: 26px; margin: 0; font-weight: bold; color: #111; }
             .sub { color: #888; font-size: 14px; margin-bottom: 35px; }
-            .file-label { display: block; background: #F3F0F7; color: var(--primary); padding: 18px; border-radius: 20px; font-weight: bold; cursor: pointer; margin-bottom: 20px; border: none; }
-            .btn-submit { background: var(--primary); color: white; border: none; padding: 18px; width: 100%; border-radius: 25px; font-weight: bold; cursor: pointer; font-size: 16px; box-shadow: 0 5px 15px rgba(93, 77, 138, 0.3); }
-            .btn-submit:disabled { background: #ccc; box-shadow: none; }
+            
+            /* Botón de selección sólido */
+            .file-label { display: block; background: #F3F0F7; color: var(--primary); padding: 18px; border-radius: 20px; font-weight: bold; cursor: pointer; margin-bottom: 20px; transition: 0.3s; }
+            
+            /* Botón Analizar con Spinner */
+            .btn-submit { background: var(--primary); color: white; border: none; padding: 18px; width: 100%; border-radius: 25px; font-weight: bold; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: 0.3s; }
+            .btn-submit:disabled { background: #ccc; cursor: not-allowed; }
+            
+            .spinner { display: none; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: white; animation: spin 1s linear infinite; }
+            @keyframes spin { to { transform: rotate(360deg); } }
+            
+            .dots:after { content: '.'; animation: dots 1.5s steps(5, end) infinite; }
+            @keyframes dots { 0%, 20% { content: '.'; } 40% { content: '..'; } 60% { content: '...'; } 80%, 100% { content: ''; } }
+            
+            #check-msg { color: #2D9B58; font-weight: bold; font-size: 14px; margin-bottom: 15px; display: none; }
         </style>
     </head>
     <body>
@@ -53,12 +65,38 @@ async def home():
             <img src="/static/logo.jpeg" class="logo-img">
             <h1>Club Skate Wheels</h1>
             <p class="sub">Análisis Biomecánico Híbrido</p>
-            <form action="/analyze" method="post" enctype="multipart/form-data" id="f">
+            <form action="/analyze" method="post" enctype="multipart/form-data" id="uploadForm">
                 <label for="v" class="file-label" id="L">📁 Seleccionar Video</label>
-                <input type="file" name="file" id="v" accept="video/*" hidden required onchange="document.getElementById('L').innerText='🎥 Video Cargado'; document.getElementById('B').disabled=false;">
-                <button type="submit" class="btn-submit" id="B" disabled>ANALIZAR EN WEB</button>
+                <input type="file" name="file" id="v" accept="video/*" hidden required>
+                <div id="check-msg">✓ Video listo para analizar</div>
+                <button type="submit" class="btn-submit" id="B" disabled>
+                    <span id="T">ANALIZAR EN WEB</span>
+                    <div class="spinner" id="S"></div>
+                </button>
             </form>
         </div>
+        <script>
+            const v = document.getElementById('v');
+            const B = document.getElementById('B');
+            const L = document.getElementById('L');
+            const T = document.getElementById('T');
+            const S = document.getElementById('S');
+            const M = document.getElementById('check-msg');
+
+            v.onchange = () => {
+                if(v.files[0]){
+                    L.innerText = "🎥 Video Cargado";
+                    M.style.display = "block";
+                    B.disabled = false;
+                }
+            };
+
+            document.getElementById('uploadForm').onsubmit = () => {
+                B.disabled = true;
+                T.innerHTML = 'PROCESANDO<span class="dots"></span>';
+                S.style.display = "block";
+            };
+        </script>
     </body>
     </html>
     """
@@ -73,11 +111,10 @@ async def analyze_video(file: UploadFile = File(...)):
     cap = cv2.VideoCapture(in_p)
     fps, w, h = cap.get(cv2.CAP_PROP_FPS) or 30, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # ARREGLO PARA EDGE: Usamos 'avc1' y forzamos que el archivo se cierre correctamente
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')
-    out = cv2.VideoWriter(out_p, fourcc, fps, (w, h))
+    # Codec avc1 (H.264) para compatibilidad total
+    out = cv2.VideoWriter(out_p, cv2.VideoWriter_fourcc(*'avc1'), fps, (w, h))
 
-    angles = []
+    angles_r, angles_s = [], []
     with mp_pose.Pose(model_complexity=1) as pose:
         while cap.isOpened():
             ret, frame = cap.read()
@@ -86,19 +123,25 @@ async def analyze_video(file: UploadFile = File(...)):
             if res.pose_landmarks:
                 mp_drawing.draw_landmarks(frame, res.pose_landmarks, mp_pose.POSE_CONNECTIONS)
                 lm = res.pose_landmarks.landmark
-                # Calculamos con los puntos que definimos (Cadera, Rodilla, Tobillo)
-                ang = calculate_angle([lm[24].x, lm[24].y], [lm[26].x, lm[26].y], [lm[28].x, lm[28].y])
-                angles.append(ang)
+                
+                # Puntos: Hombro(12), Cadera(24), Rodilla(26), Tobillo(28)
+                p12, p24, p26, p28 = [lm[12].x, lm[12].y], [lm[24].x, lm[24].y], [lm[26].x, lm[26].y], [lm[28].x, lm[28].y]
+                
+                ar = calculate_angle(p24, p26, p28) # Ángulo Rodilla
+                as_ = calculate_angle(p12, p24, p26) # Ángulo Sentadilla (Cadera)
+                
+                angles_r.append(ar)
+                angles_s.append(as_)
             out.write(frame)
 
-    cap.release()
-    out.release()
+    cap.release(); out.release()
     if os.path.exists(in_p): os.remove(in_p)
 
-    avg = round(np.mean(angles), 1) if angles else 0
-    max_ext = round(max(angles), 1) if angles else 0
-    min_open = round(min(angles), 1) if angles else 0
-    dur = round(len(angles)/fps, 2)
+    # Cálculos
+    avg_r = round(np.mean(angles_r), 1) if angles_r else 0
+    avg_s = round(np.mean(angles_s), 1) if angles_s else 0
+    max_r = round(max(angles_r), 1) if angles_r else 0
+    dur = round(len(angles_r)/fps, 2)
 
     return HTMLResponse(content=f"""
     <!DOCTYPE html>
@@ -110,60 +153,33 @@ async def analyze_video(file: UploadFile = File(...)):
             :root {{ --primary: #5D4D8A; --orange: #F39C12; --bg: #F0F2F5; }}
             body {{ font-family: 'Segoe UI', sans-serif; background: var(--bg); margin: 0; display: flex; justify-content: center; padding: 20px; }}
             .report-card {{ background: white; width: 100%; max-width: 450px; border-radius: 35px; overflow: hidden; box-shadow: 0 15px 40px rgba(0,0,0,0.1); text-align: center; }}
-            
             .status-header {{ background: linear-gradient(to bottom, #FFF5E6, #FFE0B2); padding: 35px 20px; border-bottom: 1px solid #FFCC80; }}
-            .status-title {{ color: var(--orange); font-weight: bold; font-size: 24px; letter-spacing: 1px; margin: 0; }}
-            
+            .status-title {{ color: var(--orange); font-weight: bold; font-size: 24px; margin: 0; }}
             .metrics-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 30px; border-bottom: 1px solid #EEE; }}
             .metric {{ display: flex; flex-direction: column; align-items: center; }}
-            .m-label {{ font-size: 10px; color: #999; text-transform: uppercase; font-weight: bold; margin-top: 5px; }}
+            .m-label {{ font-size: 10px; color: #999; text-transform: uppercase; font-weight: bold; margin-bottom: 5px; }}
             .m-value {{ font-size: 24px; color: var(--primary); font-weight: bold; }}
-            .icon {{ font-size: 20px; margin-bottom: 5px; opacity: 0.8; }}
-
             .video-section {{ padding: 25px; background: #FAF9FF; }}
-            .video-tag {{ display: flex; align-items: center; justify-content: center; gap: 8px; color: #888; font-weight: bold; font-size: 14px; margin-bottom: 15px; text-transform: uppercase; }}
-            video {{ width: 100%; border-radius: 25px; box-shadow: 0 10px 25px rgba(0,0,0,0.15); background: #000; }}
-            
-            .btn-back {{ display: block; padding: 25px; color: var(--primary); text-decoration: none; font-weight: bold; font-size: 15px; }}
+            video {{ width: 100%; border-radius: 25px; background: #000; box-shadow: 0 10px 25px rgba(0,0,0,0.15); }}
+            .btn-back {{ display: block; padding: 25px; color: var(--primary); text-decoration: none; font-weight: bold; }}
         </style>
     </head>
     <body>
         <div class="report-card">
-            <div class="status-header">
-                <h2 class="status-title">TÉCNICA ACEPTABLE</h2>
-            </div>
-            
+            <div class="status-header"><h2 class="status-title">TÉCNICA ACEPTABLE</h2></div>
             <div class="metrics-grid">
-                <div class="metric">
-                    <span class="icon">📊</span>
-                    <span class="m-label">Promedio</span>
-                    <span class="m-value">{avg}°</span>
-                </div>
-                <div class="metric">
-                    <span class="icon">↑</span>
-                    <span class="m-label">Extensión Máx.</span>
-                    <span class="m-value">{max_ext}°</span>
-                </div>
-                <div class="metric">
-                    <span class="icon">↓</span>
-                    <span class="m-label">Apertura (Min)</span>
-                    <span class="m-value">{min_open}°</span>
-                </div>
-                <div class="metric">
-                    <span class="icon">⏱️</span>
-                    <span class="m-label">Duración</span>
-                    <span class="m-value">{dur}s</span>
-                </div>
+                <div class="metric"><span class="m-label">Prom. Rodilla</span><span class="m-value">{avg_r}°</span></div>
+                <div class="metric"><span class="m-label">Sentadilla</span><span class="m-value">{avg_s}°</span></div>
+                <div class="metric"><span class="m-label">Extensión Máx.</span><span class="m-value">{max_r}°</span></div>
+                <div class="metric"><span class="m-label">Duración</span><span class="m-value">{dur}s</span></div>
             </div>
-
             <div class="video-section">
-                <div class="video-tag">🔴 Video Procesado</div>
+                <div style="color:#888; font-weight:bold; font-size:14px; margin-bottom:15px;">🔴 VIDEO PROCESADO</div>
                 <video controls playsinline preload="auto">
                     <source src="/static/videos/{out_f}" type="video/mp4">
                     Tu navegador no soporta el video.
                 </video>
             </div>
-            
             <a href="/" class="btn-back">← Analizar otro video</a>
         </div>
     </body>
