@@ -11,7 +11,6 @@ import uuid
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# Configuración de carpetas
 STATIC_DIR = "static"
 VIDEOS_DIR = os.path.join(STATIC_DIR, "videos")
 os.makedirs(VIDEOS_DIR, exist_ok=True)
@@ -41,22 +40,13 @@ async def home():
             body { font-family: 'Segoe UI', sans-serif; background: var(--bg); display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }
             .card { background: white; padding: 40px; border-radius: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); text-align: center; width: 100%; max-width: 400px; }
             .logo-img { width: 180px; margin-bottom: 20px; }
-            h1 { font-size: 26px; margin: 0; font-weight: bold; color: #111; }
+            h1 { font-size: 26px; font-weight: bold; color: #111; margin: 0; }
             .sub { color: #888; font-size: 14px; margin-bottom: 35px; }
-            
-            /* Botón de selección sólido */
-            .file-label { display: block; background: #F3F0F7; color: var(--primary); padding: 18px; border-radius: 20px; font-weight: bold; cursor: pointer; margin-bottom: 20px; transition: 0.3s; }
-            
-            /* Botón Analizar con Spinner */
-            .btn-submit { background: var(--primary); color: white; border: none; padding: 18px; width: 100%; border-radius: 25px; font-weight: bold; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: 0.3s; }
+            .file-label { display: block; background: #F3F0F7; color: var(--primary); padding: 18px; border-radius: 20px; font-weight: bold; cursor: pointer; margin-bottom: 20px; }
+            .btn-submit { background: var(--primary); color: white; border: none; padding: 18px; width: 100%; border-radius: 25px; font-weight: bold; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; }
             .btn-submit:disabled { background: #ccc; cursor: not-allowed; }
-            
             .spinner { display: none; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,0.3); border-radius: 50%; border-top-color: white; animation: spin 1s linear infinite; }
             @keyframes spin { to { transform: rotate(360deg); } }
-            
-            .dots:after { content: '.'; animation: dots 1.5s steps(5, end) infinite; }
-            @keyframes dots { 0%, 20% { content: '.'; } 40% { content: '..'; } 60% { content: '...'; } 80%, 100% { content: ''; } }
-            
             #check-msg { color: #2D9B58; font-weight: bold; font-size: 14px; margin-bottom: 15px; display: none; }
         </style>
     </head>
@@ -93,7 +83,7 @@ async def home():
 
             document.getElementById('uploadForm').onsubmit = () => {
                 B.disabled = true;
-                T.innerHTML = 'PROCESANDO<span class="dots"></span>';
+                T.innerText = 'PROCESANDO...';
                 S.style.display = "block";
             };
         </script>
@@ -108,36 +98,42 @@ async def analyze_video(file: UploadFile = File(...)):
     out_p = os.path.join(VIDEOS_DIR, out_f)
 
     with open(in_p, "wb") as f: f.write(await file.read())
-    cap = cv2.VideoCapture(in_p)
-    fps, w, h = cap.get(cv2.CAP_PROP_FPS) or 30, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    # Codec avc1 (H.264) para compatibilidad total
-    out = cv2.VideoWriter(out_p, cv2.VideoWriter_fourcc(*'avc1'), fps, (w, h))
+    cap = cv2.VideoCapture(in_p)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    
+    # IMPORTANTE: Codec MP4V es a veces más compatible con el guardado directo de OpenCV
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
+    out = cv2.VideoWriter(out_p, fourcc, fps, (w, h))
 
     angles_r, angles_s = [], []
-    with mp_pose.Pose(model_complexity=1) as pose:
+    
+    # Reducimos complejidad para que Render no se sature
+    with mp_pose.Pose(model_complexity=0, min_detection_confidence=0.5) as pose:
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret: break
+
             res = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             if res.pose_landmarks:
+                # Dibujar esqueleto
                 mp_drawing.draw_landmarks(frame, res.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+                
                 lm = res.pose_landmarks.landmark
+                p12 = [lm[12].x, lm[12].y]; p24 = [lm[24].x, lm[24].y]
+                p26 = [lm[26].x, lm[26].y]; p28 = [lm[28].x, lm[28].y]
                 
-                # Puntos: Hombro(12), Cadera(24), Rodilla(26), Tobillo(28)
-                p12, p24, p26, p28 = [lm[12].x, lm[12].y], [lm[24].x, lm[24].y], [lm[26].x, lm[26].y], [lm[28].x, lm[28].y]
-                
-                ar = calculate_angle(p24, p26, p28) # Ángulo Rodilla
-                as_ = calculate_angle(p12, p24, p26) # Ángulo Sentadilla (Cadera)
-                
-                angles_r.append(ar)
-                angles_s.append(as_)
+                angles_r.append(calculate_angle(p24, p26, p28))
+                angles_s.append(calculate_angle(p12, p24, p26))
+
             out.write(frame)
 
-    cap.release(); out.release()
+    cap.release()
+    out.release()
     if os.path.exists(in_p): os.remove(in_p)
 
-    # Cálculos
     avg_r = round(np.mean(angles_r), 1) if angles_r else 0
     avg_s = round(np.mean(angles_s), 1) if angles_s else 0
     max_r = round(max(angles_r), 1) if angles_r else 0
@@ -168,16 +164,15 @@ async def analyze_video(file: UploadFile = File(...)):
         <div class="report-card">
             <div class="status-header"><h2 class="status-title">TÉCNICA ACEPTABLE</h2></div>
             <div class="metrics-grid">
-                <div class="metric"><span class="m-label">Prom. Rodilla</span><span class="m-value">{avg_r}°</span></div>
+                <div class="metric"><span class="m-label">Rodilla</span><span class="m-value">{avg_r}°</span></div>
                 <div class="metric"><span class="m-label">Sentadilla</span><span class="m-value">{avg_s}°</span></div>
                 <div class="metric"><span class="m-label">Extensión Máx.</span><span class="m-value">{max_r}°</span></div>
                 <div class="metric"><span class="m-label">Duración</span><span class="m-value">{dur}s</span></div>
             </div>
             <div class="video-section">
                 <div style="color:#888; font-weight:bold; font-size:14px; margin-bottom:15px;">🔴 VIDEO PROCESADO</div>
-                <video controls playsinline preload="auto">
+                <video controls playsinline>
                     <source src="/static/videos/{out_f}" type="video/mp4">
-                    Tu navegador no soporta el video.
                 </video>
             </div>
             <a href="/" class="btn-back">← Analizar otro video</a>
